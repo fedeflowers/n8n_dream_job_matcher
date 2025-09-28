@@ -1,5 +1,7 @@
 # 🚀 AI-Powered Dream Job Matcher (n8n Workflow)
 
+!["Workflow image"](img/pipeline.png)
+
 This **n8n workflow** automates the process of finding and scoring job opportunities from LinkedIn against your professional profile (CV).  
 It uses **job scraping, vector storage for semantic matching, OpenAI for intelligent data processing, and Telegram for real-time notifications** of highly-matched jobs.
 
@@ -100,6 +102,20 @@ The matching quality depends on how well your CV is represented in the vector st
     "Neo4j Certified Professional"
   ]
 ```
+
+### 5. Adjust the Score Filter
+Locate the Node: Find the Score Filter node.
+
+Action: This node controls the minimum similarity score (e.g., > 0.85) required for a job to be sent to Telegram. Adjust this threshold to fine-tune the sensitivity of your notifications.
+
+### ▶️ Running the Workflow
+Set the workflow to Active.
+
+- The workflow is typically set up with a Schedule Trigger node to run automatically (e.g., once a day).
+- You can manually trigger a test run by clicking Execute Workflow.
+- All job matches that pass the Score Filter will be sent to the configured Telegram chat.
+
+
 If this lends your dream job you can buy me a coffe, if it doesn't let's connect and make it better!
 
 [!["Buy Me A Coffee"](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/fedeflowers)
