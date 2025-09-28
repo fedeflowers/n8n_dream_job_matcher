@@ -1,0 +1,687 @@
+{
+  "name": "jobs post finding",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://www.linkedin.com/jobs/search/?keywords=data%20engineer&location=Berlin%2C%20Germany&f_TPR=r86400",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 10000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        592,
+        -800
+      ],
+      "id": "8b5bf13e-8d6b-49a8-a06f-922fa2984c65",
+      "name": "linkedin data eng berlin"
+    },
+    {
+      "parameters": {
+        "url": "https://www.linkedin.com/jobs/search/?keywords=data%20engineer&location=Copenhagen%2C%20Denmark&f_TPR=r86400",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 10000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        -656
+      ],
+      "id": "000d5013-ddff-4248-b8d2-525116973219",
+      "name": "linkedin data eng Copenhagen"
+    },
+    {
+      "parameters": {
+        "url": "https://www.linkedin.com/jobs/search/?keywords=data%20engineer&location=Zurich%2C%20Switzerland&f_TPR=r86400",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 10000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        592,
+        -960
+      ],
+      "id": "269fdcc5-971a-4960-841f-8f5ac1a4e069",
+      "name": "linkedin Zurich data eng"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "links",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1744,
+        -944
+      ],
+      "id": "8afcc7d8-2b05-406d-ab0c-48d49f8e5b8c",
+      "name": "Split Out2"
+    },
+    {
+      "parameters": {
+        "chatId": "561389208",
+        "text": "={{ $json.message }}\n",
+        "additionalFields": {
+          "parse_mode": "MarkdownV2"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3744,
+        -592
+      ],
+      "id": "f744919b-080c-4b82-b694-6492c541e20d",
+      "name": "Telegram1",
+      "webhookId": "0f29a2c2-c2c0-4424-877a-af37bd97792b",
+      "credentials": {
+        "telegramApi": {
+          "id": "nQqL5wl2KLPfGBZJ",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.links }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 10000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1456,
+        -656
+      ],
+      "id": "29916eb9-f931-4dc2-b6d0-2976ed5b7536",
+      "name": "Scrape Each Job1",
+      "retryOnFail": true,
+      "executeOnce": false,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import base64, json, re\nfrom bs4 import BeautifulSoup\nfrom urllib.parse import urlparse\n\ndef get_html_from_item(item):\n    j = item.get(\"json\") or {}\n    # common html payload fields\n    html = j.get(\"data\") or j.get(\"html\") or j.get(\"body\") or j.get(\"page\") or j.get(\"content\")\n    if html:\n        return html, j\n    # try binary (sometimes HTML comes base64)\n    b = item.get(\"binary\") or {}\n    for _, blob in b.items():\n        data = blob.get(\"data\")\n        if data:\n            try:\n                return base64.b64decode(data).decode(\"utf-8\", \"ignore\"), j\n            except Exception:\n                pass\n    return None, j\n\ndef first_text(soup, selectors):\n    for css in selectors:\n        el = soup.select_one(css)\n        if el:\n            t = el.get_text(\" \", strip=True)\n            if t:\n                return t\n    return \"\"\n\ndef meta_content(soup, names):\n    for n in names:\n        m = soup.find(\"meta\", attrs={\"property\": n}) or soup.find(\"meta\", attrs={\"name\": n})\n        if m and m.get(\"content\"):\n            return m[\"content\"].strip()\n    return \"\"\n\ndef detect_domain(url, soup):\n    host = (urlparse(url).netloc or \"\").lower()\n    if not host:\n        canonical = soup.find(\"link\", rel=\"canonical\")\n        if canonical and canonical.get(\"href\"):\n            host = urlparse(canonical[\"href\"]).netloc.lower()\n    if \"linkedin.\" in host:   return \"linkedin\"\n    if \"boards.greenhouse.io\" in host or \"greenhouse.io\" in host: return \"greenhouse\"\n    if \"lever.co\" in host:    return \"lever\"\n    if \"workable.com\" in host: return \"workable\"\n    if \"indeed.\" in host:     return \"indeed\"\n    return \"generic\"\n\ndef coalesce_location(parts):\n    parts = [p.strip() for p in parts if p and p.strip()]\n    # dedupe while preserving order\n    out, seen = [], set()\n    for p in parts:\n        if p.lower() not in seen:\n            seen.add(p.lower()); out.append(p)\n    return \", \".join(out) if out else \"unknown location\"\n\ndef jsonld_jobposting_locations(soup):\n    \"\"\"Return (title, company, location, url) if found in JSON-LD.\"\"\"\n    for tag in soup.find_all(\"script\", type=lambda v: v and \"ld+json\" in v):\n        try:\n            data = json.loads(tag.string.strip())\n        except Exception:\n            continue\n        # Some pages embed an array of LD objects\n        nodes = data if isinstance(data, list) else [data]\n        for node in nodes:\n            # Look for JobPosting-ish objects\n            typ = node.get(\"@type\") if isinstance(node, dict) else None\n            if isinstance(typ, list):\n                is_job = \"JobPosting\" in typ\n            else:\n                is_job = (typ == \"JobPosting\")\n            if not is_job:\n                continue\n\n            title = node.get(\"title\") or \"\"\n            company = \"\"\n            hiringOrg = node.get(\"hiringOrganization\") or {}\n            if isinstance(hiringOrg, dict):\n                company = hiringOrg.get(\"name\") or \"\"\n            url = node.get(\"hiringOrganization\", {}).get(\"sameAs\") or node.get(\"url\") or \"\"\n\n            # jobLocation can be dict or list\n            locations = []\n            jl = node.get(\"jobLocation\")\n            if jl:\n                jls = jl if isinstance(jl, list) else [jl]\n                for loc in jls:\n                    addr = loc.get(\"address\") if isinstance(loc, dict) else None\n                    if isinstance(addr, dict):\n                        parts = [\n                            addr.get(\"addressLocality\"),\n                            addr.get(\"addressRegion\"),\n                            addr.get(\"addressCountry\"),\n                        ]\n                        locations.append(coalesce_location(parts))\n            # Remote fallback in JSON-LD\n            if not locations:\n                remote_ok = node.get(\"jobLocationType\") or node.get(\"applicantLocationRequirements\")\n                if remote_ok and isinstance(remote_ok, str) and \"Remote\" in remote_ok:\n                    locations.append(\"Remote\")\n\n            location = locations[0] if locations else \"\"\n\n            return (title, company, location, url)\n    return (\"\", \"\", \"\", \"\")\n\nresults = []\n\nfor item in _input.all():\n    html, j = get_html_from_item(item)\n    if not html:\n        continue\n\n    soup = BeautifulSoup(html, \"html.parser\")\n\n    # Prefer the page URL stored by the scraper; fall back to canonical/og:url\n    req_url = (j.get(\"request\", {}) or {}).get(\"url\", \"\") or j.get(\"url\") or \"\"\n    canonical = meta_content(soup, [\"og:url\"]) or (soup.find(\"link\", rel=\"canonical\").get(\"href\") if soup.find(\"link\", rel=\"canonical\") else \"\")\n    page_url = canonical or req_url\n\n    # --- IMPORTANT: do NOT trust any upstream location (prevents \"Switzerland\" carry-over)\n    upstream_location = None\n\n    # JSON-LD first (most reliable across sites)\n    jl_title, jl_company, jl_location, jl_url = jsonld_jobposting_locations(soup)\n\n    domain = detect_domain(page_url, soup)\n\n    # Base fields\n    title = jl_title or meta_content(soup, [\"og:title\", \"twitter:title\"]) or first_text(soup, [\"h1\", \"header h1\"]) or \"unknown title\"\n    company = jl_company or meta_content(soup, [\"og:site_name\"]) or \"\"\n    location = jl_location  # may be \"\"\n\n    # Site-specific fallbacks for title/company/location/description\n    if domain == \"linkedin\":\n        title = title or first_text(soup, [\n            \"h1[class*='top-card-layout__title']\",\n            \"h1[class*='top-card-layout__entity-info'] h1\",\n            \"h1.jobs-unified-top-card__job-title\",\n            \"h1\"\n        ])\n        company = company or first_text(soup, [\n            \"a[class*='topcard__org-name-link']\",\n            \"span[class*='topcard__flavor'] a\",\n            \"span[class*='topcard__flavor']\"\n        ]) or \"unknown company\"\n        if not location:\n            # support multiple LinkedIn locales/DOMs\n            location = first_text(soup, [\n                \"span[class*='topcard__flavor'][class*='--bullet']\",\n                \"span.jobs-unified-top-card__bullet\",\n                \"div.jobs-unified-top-card__primary-description :where(span,li)[class*=bullet]\",\n                \"div.top-card-layout__entity-info span\"\n            ])\n\n        jd = first_text(soup, [\n            \"div.description__text--rich\",\n            \"section.show-more-less-html\",\n            \"div[data-test-description-section]\",\n            \"div.show-more-less-html__markup\"\n        ]) or \"no jd\"\n\n    elif domain == \"greenhouse\":\n        title = title or first_text(soup, [\"h1.app-title\", \"h1.job-title\", \"h1\"])\n        company = company or first_text(soup, [\".header__content .company-name\", \".company-name\"]) or \"unknown company\"\n        if not location:\n            location = first_text(soup, [\".location\", \"div.opening div.location\", \"p.location\"])\n        jd = first_text(soup, [\"div#content\", \"div.content\", \"section#content\", \"div.section-wrapper\"]) or \"no jd\"\n\n    elif domain == \"lever\":\n        title = title or first_text(soup, [\"h2.posting-headline\", \"h2.posting-title\", \"h1\"])\n        company = company or first_text(soup, [\".posting-headline .posting-company\", \".company\"]) or \"unknown company\"\n        if not location:\n            location = first_text(soup, [\".posting-categories .location\", \"div.location\", \"span.location\"])\n        jd = first_text(soup, [\"div.posting\", \"div.description\", \"section.content\"]) or \"no jd\"\n\n    elif domain == \"workable\":\n        title = title or first_text(soup, [\"h1.job-title\", \"h1\", \"header h1\"])\n        company = company or first_text(soup, [\"span.company\", \".job-header .company\"]) or \"unknown company\"\n        if not location:\n            location = first_text(soup, [\"span.job-location\", \".job-location\", \"li.location\", \".location\"])\n        jd = first_text(soup, [\"section.job-description\", \"div#job-description\", \"article\", \"div.description\"]) or \"no jd\"\n\n    elif domain == \"indeed\":\n        title = title or first_text(soup, [\"h1.jobsearch-JobInfoHeader-title\", \"h1\"])\n        company = company or first_text(soup, [\"div.jobsearch-InlineCompanyRating div:nth-child(1)\", \"span.companyName\"]) or \"unknown company\"\n        if not location:\n            location = first_text(soup, [\"div.companyLocation\", \"span.companyLocation\", \"div.jobsearch-InlineCompanyRating div:nth-child(3)\"])\n        jd = first_text(soup, [\"#jobDescriptionText\", \".jobsearch-jobDescriptionText\"]) or \"no jd\"\n\n    else:\n        if not location:\n            location = first_text(soup, [\".location\", \"li.location\", \"span.location\", \"[itemprop='addressLocality']\"]) or \"\"\n        jd = first_text(soup, [\"article\", \"main\", \"section[role='main']\", \"div[role='main']\"]) or \"no jd\"\n\n    # Final location: never use the upstream; prefer JSON-LD > site > generic; clean artifacts\n    location = re.sub(r\"\\s{2,}\", \" \", location).strip() or \"unknown location\"\n\n    results.append({\n        \"title\": title,\n        \"company\": company or \"unknown company\",\n        \"location\": location,\n        \"jd\": jd,\n        \"link\": page_url or (j.get(\"link\") or j.get(\"request\", {}).get(\"url\") or \"\")\n    })\n\nreturn results\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        -656
+      ],
+      "id": "243d98dd-18f8-4aad-b4c3-fbc107e9d97d",
+      "name": "Parse1",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -240,
+        -944
+      ],
+      "id": "cd503a80-d5fd-452d-b535-86f477e4ff39",
+      "name": "Schedule Trigger1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1499f1ac-a7ae-4983-85c7-aa7b8445b2e2",
+              "leftValue": "={{ $json.score }}",
+              "rightValue": 0.5,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2944,
+        -592
+      ],
+      "id": "5befa962-88dd-4d81-974a-7e909143273e",
+      "name": "Score Filter1"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * n8n Function node: build Telegram-safe job messages\n *\n * Expected input formats (per item):\n * 1) item.json.document.pageContent -> will be parsed with extractField()\n * 2) item.json.title, item.json.company, item.json.location, item.json.link -> used directly\n *\n * Keeps the original output format: returns an array of { json: { message: \"...\" } }\n */\n\nfunction escapeMdV2(text) {\n  return String(text || '').replace(/([_*[\\]()~`>#+\\-=|{}.!\\\\])/g, '\\\\$1');\n}\n\nfunction extractField(pageContent, fieldName) {\n  if (!pageContent) return '';\n  if (fieldName === 'link') {\n    const urlMatch = pageContent.match(/https?:\\/\\/[^\\s,}]+/i);\n    if (urlMatch) return urlMatch[0].trim();\n  }\n  const re = new RegExp(fieldName + '\\\\s*:\\\\s*([^,}\\\\n]+)', 'i');\n  const m = pageContent.match(re);\n  if (!m) return '';\n  return m[1].trim().replace(/^[\\s\"'{]+|[\\s\"'}]+$/g, '');\n}\n\n// Split long messages so Telegram can accept them (4096 hard limit)\nfunction splitIntoChunks(text, maxLen = 3500) {\n  const chunks = [];\n  let remaining = text;\n  while (remaining.length > maxLen) {\n    let cut = remaining.lastIndexOf('\\n', maxLen);\n    if (cut === -1) cut = remaining.lastIndexOf(' ', maxLen);\n    if (cut === -1) cut = maxLen;\n    chunks.push(remaining.slice(0, cut).trim());\n    remaining = remaining.slice(cut).trimStart();\n  }\n  if (remaining) chunks.push(remaining);\n  return chunks;\n}\n\n// Build messages using the same \"map\" style you had originally, but allow explicit fields\nconst messages = items.map(item => {\n  // accept explicit fields if provided (preferred), otherwise parse document.pageContent\n  const json = item.json || {};\n  const pc = json.document?.pageContent || '';\n  const title = json.title?.toString().trim() || extractField(pc, 'title');\n  const company = json.company?.toString().trim() || extractField(pc, 'company');\n  const location = json.location?.toString().trim() || extractField(pc, 'location');\n  const link = json.link?.toString().trim() || extractField(pc, 'link');\n  const score = (json.score !== undefined && json.score !== null) ? json.score : '';\n\n  // If both company and location are unknown/empty, skip this item (return empty string -> filtered later)\n  if (\n    (!company && !location) ||\n    (company?.trim().toLowerCase() === 'unknown company' &&\n     location?.trim().toLowerCase() === 'unknown location')\n  ) return '';\n\n\n  return `👨‍💼 *Title:* ${escapeMdV2(title)}\n🏢 *Company:* ${escapeMdV2(company)}\n📍 *Location:* ${escapeMdV2(location)}\n📊 *Score:* ${escapeMdV2(score)}\n🔗 ${ link ? `[Job Link](${escapeMdV2(link)})` : '_No link provided_' }`;\n});\n\n// Flatten: one output item per (possibly split) message\nconst out = [];\nfor (const msg of messages) {\n  if (!msg) continue; // skipped items become empty strings\n  for (const chunk of splitIntoChunks(msg)) {\n    out.push({ json: { message: chunk } });\n  }\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3296,
+        -576
+      ],
+      "id": "735702ac-44c6-4631-8598-4dae08e9d934",
+      "name": "single message output1"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        -912
+      ],
+      "id": "4f58713c-49ef-4dfa-82bf-aed27bf6c9fb",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "memoryKey": {
+          "__rl": true,
+          "value": "id",
+          "mode": "id"
+        },
+        "embeddingBatchSize": 1000,
+        "clearStore": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [
+        1888,
+        -416
+      ],
+      "id": "a9b1b999-94dd-4943-b62f-8c79003893d8",
+      "name": "Simple Vector Store"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2000,
+        192
+      ],
+      "id": "662a919e-994e-4c97-9215-b525d0f1e39f",
+      "name": "Embeddings OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "i5hndkjFKNMvxU5Q",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $('Message a model').item.json.message.content }}",
+        "textSplittingMode": "custom",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        -256
+      ],
+      "id": "3e928e40-002a-47d8-821c-006d59689608",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "chunkSize": 10000
+      },
+      "type": "@n8n/n8n-nodes-langchain.textSplitterCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        2096,
+        -128
+      ],
+      "id": "ff9dd994-101c-4a6e-ad53-f830dbb9ca9e",
+      "name": "Character Text Splitter"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Read the text in {{ $json.jd }} and EXTRACT ONLY the following fields found verbatim in that text, if not in english translate it first: skills required, years of experience, link to the job, and any mentions that indicate a focus on software engineering and/or data engineering/data science skills. Do NOT add, infer, normalize, paraphrase, expand, or remove items — return exactly what appears in the source text.\nIf the text is in another language translate it to ENGLISH.\n\n- For **title**: {{ $json.title }}\n- For **company**: {{ $json.company }}\n- For **location**; {{ $json.location }}\n- For **skills**: list the skills that appear as they are in the job description or ones that are simply deducible by the job description, keep them technical, comma-separated, inside square brackets.\n- For **years_experience**: copy the exact phrase from the text (e.g., \"5+ years\", \"3 years experience\"); if none present, leave blank.\n- For **focus**: copy the exact phrases or short sentences from the text that mention software engineering, data engineering, or data science focus; place them inside square brackets, comma-separated. If none present, leave blank.\n- For **link**: {{ $json.link }}\n\nReturn a single-line string in this exact format (no extra commentary, no line breaks):\n\n{ title: {{ $json.title }}, company: {{ $json.company }}, location: {{ $json.location }}, skills: [ <skill1>, <skill2>, ... ], years_experience: <value>, focus: [ <focus1>, <focus2>, ... ], link: {{$json.link}}}\n",
+              "role": "assistant"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1312,
+        -416
+      ],
+      "id": "cbd50b97-d6d1-42e7-b52c-a83a3243b8c6",
+      "name": "Message a model",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "openAiApi": {
+          "id": "i5hndkjFKNMvxU5Q",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "load",
+        "memoryKey": {
+          "__rl": true,
+          "value": "id",
+          "mode": "list",
+          "cachedResultName": "id"
+        },
+        "prompt": "={{ $json.resume }}",
+        "topK": 100
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreInMemory",
+      "typeVersion": 1.3,
+      "position": [
+        2672,
+        -416
+      ],
+      "id": "9cfca430-4fe6-4a3f-ac51-f3b798fb3c9f",
+      "name": "Simple Vector Store1"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2256,
+        -512
+      ],
+      "id": "29f51ebb-b9e9-4cc8-b65a-a0a84a95cdb7",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "54f2e2d0-7062-428b-921f-bb7e5d4ce2ab",
+              "name": "resume",
+              "value": "title: Data & Machine Learning Engineer, skills: [ Python, SQL, NoSQL, Databricks, Apache Spark, Airflow, Google Cloud Platform, BigQuery, AWS, Azure, Composer, IAM, IBM DataStage, VectorDB, Qdrant, Machine Learning, Artificial Intelligence, Data Engineering, Data Orchestration, ETL, RAG, Scikit-learn, Streamlit, LangChain, Docker, Data Structures & Algorithms, Cloud Deployment, GitHub, N8N ], experience_summary: [ Built scalable data pipelines in Databricks (Medallion Architecture)., Migrated Airflow DAGs to GCP Composer 2.x with 10x efficiency gain., Implemented SCD Type 2 for historical data optimization., Optimized IBM DataStage ETL workflows and SQL queries., Developed RAG pipelines using OpenAI embeddings + vector databases., Researched GANs and AI security risks (deepfakes, membership inference). ], certifications: [ Google Cloud Professional Machine Learning Engineer, AWS Machine Learning Specialty, Databricks Certified Associate Developer for Apache Spark, Databricks Certified Data Engineer Associate, Neo4j Certified Professional ]",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2496,
+        -528
+      ],
+      "id": "f943b7a0-d27e-42e6-a53c-c04ade1a1b44",
+      "name": "INSERT CV"
+    },
+    {
+      "parameters": {
+        "content": "## insert CV in the specified format for better job matching\n",
+        "height": 192,
+        "width": 192
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2448,
+        -752
+      ],
+      "typeVersion": 1,
+      "id": "ce14ced1-dc8c-44bf-ba5a-183a37f93c1f",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Edit pause if you want it faster, take care of possible scraping blocks from LinkedIn or other sources\n",
+        "height": 224
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1120,
+        -752
+      ],
+      "typeVersion": 1,
+      "id": "5f3591f1-b423-4759-9fc7-e42cfe62f75e",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## Add whatever LinkedIn search you want, if you want to add other sources, make them work also in the Extract Job Links node\n",
+        "height": 272,
+        "width": 288
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        512,
+        -1312
+      ],
+      "typeVersion": 1,
+      "id": "fff85f12-9a83-4213-a6ca-75250eb35844",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "# DROP-IN for \"Extract Job Links\" (multi-site, multi-input, deduped)\n# Supports: linkedin, indeed(.com/ch), jobs.ch, jobscout24.ch, jobup.ch, monster.ch,\n#           swissdevjobs.ch, it-jobs-switzerland.ch, englishjobs.ch, wearedevelopers.com\n# Falls back to a generic heuristic for other career sites.\n\nfrom bs4 import BeautifulSoup\nfrom urllib.parse import urljoin, urlparse, urlunparse, parse_qs\nimport re\n\ndef add_abs(hrefs, base, href):\n    if not href:\n        return\n    hrefs.add(urljoin(base, href))\n\ndef host(url):\n    try:\n        return urlparse(url or \"\").netloc.lower()\n    except Exception:\n        return \"\"\n\ndef detect_domain(domain_hint, start_url):\n    if domain_hint:\n        return domain_hint.lower()\n    h = host(start_url)\n    if not h:\n        return \"generic\"\n    if \"linkedin.\" in h: return \"linkedin\"\n    if \"indeed.\" in h:   return \"indeed\"\n    if \"jobs.ch\" in h:   return \"jobs_ch\"\n    if \"jobscout24.ch\" in h: return \"jobscout24\"\n    if \"jobup.ch\" in h:  return \"jobup\"\n    if \"monster.ch\" in h: return \"monster_ch\"\n    if \"swissdevjobs.ch\" in h: return \"swissdevjobs\"\n    if \"it-jobs-switzerland.ch\" in h: return \"itjobs_switzerland\"\n    if \"englishjobs.ch\" in h: return \"englishjobs\"\n    if \"wearedevelopers.com\" in h: return \"wearedevelopers\"\n    return \"generic\"\n\ndef normalize(u):\n    # remove fragments and trim\n    try:\n        p = urlparse(u.strip())\n        p = p._replace(fragment=\"\")\n        return urlunparse(p)\n    except Exception:\n        return u\n\ndef extract_links(domain_hint, start_url, html):\n    soup = BeautifulSoup(html or \"\", \"html.parser\")\n    hrefs = set()\n    d = detect_domain(domain_hint, start_url)\n\n    # --------- LINKEDIN ----------\n    if d == 'linkedin':\n        # job cards in search results\n        for a in soup.select('ul.jobs-search__results-list li a[class*=\"base-card\"], a[href*=\"/jobs/view/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        normed = []\n        for u in hrefs:\n            p = urlparse(u)\n            # force canonical host and strip tracking on detail pages\n            p = p._replace(netloc='www.linkedin.com')\n            if '/jobs/' in p.path:\n                p = p._replace(query='')\n            normed.append(urlunparse(p))\n        return list(dict.fromkeys(normed))\n\n    # --------- INDEED (.com / ch) ----------\n    if d == 'indeed':\n        # both indeed.com and ch.indeed.com\n        for a in soup.select('a[href*=\"indeed.com/viewjob\"], a[href*=\"/rc/clk\"], a[href*=\"/company/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        cleaned = []\n        for u in hrefs:\n            p = urlparse(u)\n            q = parse_qs(p.query)\n            # keep canonical id param when present\n            if 'jk' in q:\n                p = p._replace(query=f'jk={q[\"jk\"][0]}')\n            cleaned.append(urlunparse(p))\n        return list(dict.fromkeys(cleaned))\n\n    # --------- JOBS.CH ----------\n    if d == 'jobs_ch':\n        # Prefer explicit detail routes (EN / DE / FR)\n        detail_selectors = [\n            'a[href*=\"/en/vacancies/detail/\"]',\n            'a[href*=\"/de/stellenangebote/detail/\"]',\n            'a[href*=\"/fr/offres-emplois/detail/\"]',\n        ]\n        for sel in detail_selectors:\n            for a in soup.select(sel):\n                add_abs(hrefs, start_url, a.get('href'))\n\n        # Fallback: job cards often live in <article> with inner <a> pointing to detail\n        if not hrefs:\n            for a in soup.select('article a[href]'):\n                href = a.get('href') or ''\n                if any(p in href for p in (\"/vacancies/detail/\", \"/stellenangebote/detail/\", \"/offres-emplois/detail/\")):\n                    add_abs(hrefs, start_url, href)\n\n        # Last resort: generic site-wide detail patterns\n        if not hrefs:\n            for a in soup.find_all('a', href=True):\n                h = a['href']\n                if any(s in h for s in (\"/vacancies/detail/\", \"/stellenangebote/detail/\", \"/offres-emplois/detail/\")):\n                    add_abs(hrefs, start_url, h)\n\n        return [normalize(u) for u in hrefs]\n\n\n    # --------- JOBSCOUT24.CH ----------\n    if d == 'jobscout24':\n        # URLs like /en/job/<slug>-<id>/ or /de/job/...\n        for a in soup.select('a[href*=\"/en/job/\"], a[href*=\"/de/job/\"], a[href*=\"/fr/job/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        return [normalize(u) for u in hrefs]\n\n    # --------- JOBUP.CH ----------\n    if d == 'jobup':\n        # Common detail path contains /fr/emplois/ or /en/jobs/ with an id segment\n        for a in soup.select('a[href*=\"/fr/emplois/\"], a[href*=\"/en/jobs/\"], a[href*=\"/de/jobs/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        # fallback: any anchor inside job card containers\n        for a in soup.select('article a[href]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        # keep only job detail-ish paths\n        out = [u for u in hrefs if re.search(r'/(emplois|jobs)/', urlparse(u).path)]\n        return [normalize(u) for u in out]\n\n    # --------- MONSTER.CH ----------\n    if d == 'monster_ch':\n        # Usually /job/ slug\n        for a in soup.select('a[href*=\"/job/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        return [normalize(u) for u in hrefs]\n\n    # --------- SWISSDEVJOBS.CH ----------\n    if d == 'swissdevjobs':\n        # Detail pages: /job/<id or slug>\n        for a in soup.select('a[href*=\"/job/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        return [normalize(u) for u in hrefs]\n\n    # --------- IT-JOBS-SWITZERLAND.CH ----------\n    if d == 'itjobs_switzerland':\n        # Detail pages contain /job/ or /jobs/<id>\n        for a in soup.select('a[href*=\"/job/\"], a[href*=\"/jobs/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        # filter obvious list/pagination links\n        out = [u for u in hrefs if not re.search(r'/search|/page=', u)]\n        return [normalize(u) for u in out]\n\n    # --------- ENGLISHJOBS.CH ----------\n    if d == 'englishjobs':\n        # Many pages use /job/<slug> or /jobs/<slug>\n        for a in soup.select('a[href*=\"/job/\"], a[href*=\"/jobs/\"]'):\n            add_abs(hrefs, start_url, a.get('href'))\n        return [normalize(u) for u in hrefs]\n\n    # --------- WEAREDEVELOPERS.COM ----------\n    if d == 'wearedevelopers':\n        # Detail pages: /jobs/<slug>\n        for a in soup.select('a[href*=\"/jobs/\"]'):\n            href = a.get('href') or ''\n            # skip list filters like /jobs?keyword=\n            if '?' in href:\n                continue\n            add_abs(hrefs, start_url, href)\n        return [normalize(u) for u in hrefs]\n\n    # --------- GENERIC ----------\n    # Generic heuristic: on-site anchors that look like job detail pages\n    for a in soup.find_all('a', href=True):\n        h = a['href']\n        if any(s in h.lower() for s in ['/job/', '/jobs/', '/career', '/careers/', '/position', '/positions/', '/opening', '/vacancy', '/stellen']):\n            add_abs(hrefs, start_url, h)\n    # avoid obvious search/pagination/filter links\n    out = [u for u in hrefs if not re.search(r'(\\?|&)page=|/search|/filters?', u)]\n    return [normalize(u) for u in out]\n\n# ---- process ALL inputs and combine\nall_items = _input.all()\nall_links = []\nseen = set()\n\nfor it in all_items:\n    j = it.get('json', {})\n    domain   = (j.get('domain') or '').strip()\n    startUrl = j.get('startUrl') or j.get('url') or ''\n    html     = j.get('data') or j.get('html') or ''\n\n    links = extract_links(domain, startUrl, html)\n    for u in links:\n        u = normalize(u)\n        if not u:\n            continue\n        # keep only absolute http(s)\n        p = urlparse(u)\n        if p.scheme not in ('http', 'https'):\n            continue\n        if u not in seen:\n            seen.add(u)\n            all_links.append(u)\n\n# Output a SINGLE item with a 'links' array -> your \"Split Out\" node will fan these out\nreturn [{ \"json\": { \"links\": all_links } }]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1504,
+        -944
+      ],
+      "id": "eaed86ab-502d-4a5c-ac76-e362c6d53e49",
+      "name": "Extract Job Links"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "linkedin data eng berlin": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "linkedin data eng Copenhagen": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "linkedin Zurich data eng": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out2": {
+      "main": [
+        [
+          {
+            "node": "Scrape Each Job1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Each Job1": {
+      "main": [
+        [
+          {
+            "node": "Parse1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse1": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger1": {
+      "main": [
+        [
+          {
+            "node": "linkedin Zurich data eng",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "linkedin data eng berlin",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "linkedin data eng Copenhagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Filter1": {
+      "main": [
+        [
+          {
+            "node": "single message output1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "single message output1": {
+      "main": [
+        [
+          {
+            "node": "Telegram1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Extract Job Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Simple Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          },
+          {
+            "node": "Simple Vector Store1",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Simple Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Character Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Vector Store": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Simple Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Vector Store1": {
+      "main": [
+        [
+          {
+            "node": "Score Filter1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram1": {
+      "main": [
+        []
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "INSERT CV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT CV": {
+      "main": [
+        [
+          {
+            "node": "Simple Vector Store1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Job Links": {
+      "main": [
+        [
+          {
+            "node": "Split Out2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d8f547ab-5c66-49ec-a1d3-0e465d45c57c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "190f72b2be14107366b26cc73e0cce4a1de72cdcdfe3d02ca854ee253fe5ed41"
+  },
+  "id": "UTqfGJ5o7LdRSZTN",
+  "tags": []
+}
